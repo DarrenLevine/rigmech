@@ -968,6 +968,10 @@ class rigmech:
         the prefix addition "func_"
         """
 
+        # wont work without joints
+        if len(self.Joints) == 0:
+            return
+
         # possible input states:
         q_syms = self.global_syms["q"]
         dq_syms = self.global_syms["dq"]
@@ -1027,6 +1031,8 @@ class rigmech:
         for glsym_name in glsym_names:
             expression = self.global_syms[glsym_name]
             input_list = ordered_inputs_to_expr(expression)
+            if glsym_name in ['qFCoriolis'] and not dq_syms[0] in input_list:
+                input_list += dq_syms
             self.global_syms["func_" + glsym_name] = sp.lambdify(
                 input_list, expression, backend
             )
@@ -1052,7 +1058,7 @@ class rigmech:
         if Quadratic:  # include qudratic force contributions
             qForceQuadratic = self.global_syms["func_qFCoriolis"](
                 *qlst, *dqlst)
-            qForces += qForceQuadratic
+            qForces -= qForceQuadratic
         if Friction:  # include friction force contributions
             dForceFriction = -dq * \
                 np.array(self.global_syms["qFrict"]).reshape(shape)
