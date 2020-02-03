@@ -51,7 +51,7 @@ def getRobotLines(q, isJoint):
 # set up the plot
 fig, ax = plt.subplots()
 linejnt, = ax.plot([0], [0], '-o', label="joint")
-linemass, = ax.plot([0], [0], 's', label="mass")
+linemass, = ax.plot([0], [0], '--s', label="mass")
 ax.set(xlabel='X', ylabel='Y', xlim=[-3, 3],
        ylim=[-3, 3], title='Pendulum')
 ax.set_aspect('equal')
