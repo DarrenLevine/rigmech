@@ -2,7 +2,7 @@
 
 python rigid body analytic mechanics with sympy and urdf
 
-![](example_Pendulum.gif)
+![Pendulum Example GIF](example_Pendulum.gif)
 
 ## Features
 
@@ -48,7 +48,7 @@ print(list(Robot.global_syms.keys()))
 help(Robot.global_syms["func_Mq"])  # joint space inertia (mass) matrix
 
 # To simulate the mechanism, try:
-q, dq, dqq = Robot.ForwardDynamics(dt, q, dq, dqq, FictitiousAccels)
+q, dq, ddq = Robot.ForwardDynamics(dt, q, dq, qForceJoints, xyzFictitiousAccels)
 
 # In addition, since for large mechanisms, the equations can take awhile to
 # calculate analytically (especially if the Simplify=True option is used),

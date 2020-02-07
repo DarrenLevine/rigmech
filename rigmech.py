@@ -946,7 +946,7 @@ class rigmech:
 
     def simplify(self):
         """ simplify all the symbolic terms in self.joint_syms, and
-        self.global_syms"""
+        self.global_syms (in place)"""
         for key, val in self.global_syms.items():
             if isinstance(val, (sp.Expr, sp.Matrix)):
                 simp = sp.simplify(val)
@@ -966,6 +966,10 @@ class rigmech:
     def lambdify(self, backend="numpy"):
         """ turns any symbolic terms into lambda functions, with
         the prefix addition "func_"
+
+        Args:
+            backend (str, optional): Backend selection to pass to sympy's
+            lambdify. Defaults to 'numpy'
         """
 
         # wont work without joints
@@ -1038,21 +1042,41 @@ class rigmech:
             )
 
     def ForwardDynamics(
-        self,
-        dt,
-        q,
-        dq,
-        qForceJoints,
-        extForces=[0.0, 0.0, -9.81, 0.0, 0.0, 0.0],
-        Friction=True,
-        Quadratic=True,
+            self,
+            dt,
+            q,
+            dq,
+            qForceJoints,
+            extAccels=[0., 0., -9.81, 0., 0., 0.],
+            Friction=True,
+            Quadratic=True
     ):
+        """Simulates a forward euler step in time for the machanism.
+
+        Args:
+            dt (float): Time step size
+            q (list of floats): initial joint position vector (in joint space)
+            dq (list of floats): initial joint velocity vector (in joint space)
+            qForceJoints (list of floats): joint force vector (in joint space)
+            extAccels (list of 6 floats): fictitious translational and
+                rotational accelerations (in cartesian space) [x,y,z,Wx,Wy,Wz]
+                defaults to -z gravity vector ([0., 0., -9.81, 0., 0., 0.])
+            Friction (bool, optional): If true, includes a the influence of
+                global_syms["qFrict"]. Defaults to True.
+            Quadratic (bool, optional): If true, includes a the influence of
+                global_syms["qFCoriolis"]. Defaults to True.
+
+        Returns:
+            q (list of floats): final joint position vector (in joint space)
+            dq (list of floats): final joint velocity vector (in joint space)
+            ddq (list of floats): final joint accel vector (in joint space)
+        """
         q = np.array(q).reshape(len(q), 1).copy()
         shape = (len(dq), 1)
         dq = np.array(dq).reshape(shape).copy()
         dqlst = dq.T.tolist()[0]
         qlst = q.T.tolist()[0]
-        qForceExternal = self.global_syms["func_qFext"](*qlst, *extForces)
+        qForceExternal = self.global_syms["func_qFext"](*qlst, *extAccels)
         qForceJoints = np.array(qForceJoints).reshape(len(qForceJoints), 1)
         qForces = qForceJoints + qForceExternal
         if Quadratic:  # include qudratic force contributions

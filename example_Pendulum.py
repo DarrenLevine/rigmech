@@ -59,7 +59,7 @@ plt.legend()
 
 # initialize state
 qForceJoints = [0. for _ in range(MotorCount)]  # tau
-ExtForces = [0., -9.81, 0., 0., 0., 0.]  # x y z, wx, wy, wz
+ExtAccels = [0., -9.81, 0., 0., 0., 0.]  # x y z, wx, wy, wz
 q = [0.01 for _ in range(MotorCount)]  # joint angles in radians
 dq = [0. for _ in range(MotorCount)]  # joint velocities in radians/sec
 
@@ -70,7 +70,7 @@ def update_plot(num):
     global q, dq, linemass, linejnt
     for _ in range(substeps):
         q, dq, _ = Pendulum.ForwardDynamics(
-            dt/substeps, q, dq, qForceJoints, ExtForces)
+            dt/substeps, q, dq, qForceJoints, ExtAccels)
     linejnt.set_data(getRobotLines(q, True))
     linemass.set_data(getRobotLines(q, False))
     return linejnt, linemass
