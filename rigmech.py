@@ -535,9 +535,8 @@ class rigmech:
 
     @staticmethod
     def T2Rxyz(T):
-        """ Seperates a homogeneous transformation matrix T
-        into its rotation matrix R and translational xyz
-        components """
+        """ Seperates a homogeneous transformation matrix T into its rotation
+        matrix R and translational xyz components"""
         R = T[:3, :3]
         xyz = T[:3, 3]
         return R, xyz
@@ -567,6 +566,23 @@ class rigmech:
                     * self.joint_syms[joint_name]["Tlocal_joint"]
                 )
         return self.joint_syms[joint_name]["T_joint"]
+
+    def W_joint_chain(self, joint_name):
+        """ Sums the rotational transformations from a kinematic
+        chain's base joint to the specified joint """
+        if self.joint_syms[joint_name].get("W") is None:
+            # go up the parent chain of transformations
+            parent_joint_name = self.global_syms["Jname2parentJname"].get(
+                joint_name)
+            if parent_joint_name is None:
+                self.joint_syms[joint_name]["W"] = \
+                    self.joint_syms[joint_name]["q_rpy"]
+            else:
+                self.joint_syms[joint_name]["W"] = (
+                    self.W_joint_chain(parent_joint_name)
+                    + self.joint_syms[joint_name]["q_rpy"]
+                )
+        return self.joint_syms[joint_name]["W"]
 
     def _preprocess_heirarchy(self, FloatingBase):
         ResolveLinks = True
@@ -829,36 +845,42 @@ class rigmech:
 
             # xyz: translation from base to joint or link frame
             E["xyz_joint"] = rigmech.applyTx(
-                E["T_joint"], self.global_syms["xyz"])
+                E["T_joint"], E["q_xyz"]+sp.Matrix(self.global_syms["xyz"]))
             E["xyz_link"] = rigmech.applyTx(
-                E["T_link"], self.global_syms["xyz"])
+                E["T_link"], E["q_xyz"]+sp.Matrix(self.global_syms["xyz"]))
             E["xyz_coj"] = E["xyz_joint"].subs(zero_xyz)  # center of joint
             E["xyz_com"] = E["xyz_link"].subs(zero_xyz)  # center of mass
 
             # Wxyz: rotation from base to joint or link frame
+            E["W"] = self.W_joint_chain(j_name)
             E["Wxyz_joint"] = rigmech.applyTw(
-                E["T_joint"], self.global_syms["Wxyz"])
+                E["T_joint"], E["W"]+sp.Matrix(self.global_syms["Wxyz"]))
             E["Wxyz_link"] = rigmech.applyTw(
-                E["T_link"], self.global_syms["Wxyz"])
+                E["T_link"], E["W"]+sp.Matrix(self.global_syms["Wxyz"]))
+            E["Wxyz_coj"] = E["Wxyz_joint"].subs(zero_Wxyz)  # coj orientation
+            E["Wxyz_com"] = E["Wxyz_link"].subs(zero_Wxyz)  # com orientation
 
+            # calculate the d[x(i) y(i) z(i) Wx(i) Wy(i) Wz(i)]/dq(j)
+            # a.k.a. jacobian components for the current joint/link frame
+            # (i) with respect to all the other joints (j) to form a
+            # complete Jacobian matrix
             E["J_joint"] = sp.Matrix()
             E["J_link"] = sp.Matrix()
             for jnm in self.Joints:
-                if not self.joint_syms[jnm]["q"] is 0:
-                    dxyz_dq__joint = E["xyz_joint"].diff(
-                        self.joint_syms[jnm]["q"])
-                    dxyz_dq__link = E["xyz_link"].diff(
-                        self.joint_syms[jnm]["q"])
-                    dWxyz_dq__joint = E["Wxyz_joint"].diff(
-                        self.joint_syms[jnm]["q"])
-                    dWxyz_dq__link = E["Wxyz_link"].diff(
-                        self.joint_syms[jnm]["q"])
-                    E["J_joint"] = E["J_joint"].row_join(
-                        dxyz_dq__joint.col_join(dWxyz_dq__joint)
-                    )
-                    E["J_link"] = E["J_link"].row_join(
-                        dxyz_dq__link.col_join(dWxyz_dq__link)
-                    )
+                jnm_q = self.joint_syms[jnm]["q"]
+                if jnm_q is not 0:
+
+                    # joints:
+                    dxyz_dq__joint = E["xyz_joint"].diff(jnm_q)
+                    dWxyz_dq__joint = E["Wxyz_joint"].diff(jnm_q)
+                    new_row = dxyz_dq__joint.col_join(dWxyz_dq__joint)
+                    E["J_joint"] = E["J_joint"].row_join(new_row)
+
+                    # links:
+                    dxyz_dq__link = E["xyz_link"].diff(jnm_q)
+                    dWxyz_dq__link = E["Wxyz_link"].diff(jnm_q)
+                    new_row = dxyz_dq__link.col_join(dWxyz_dq__link)
+                    E["J_link"] = E["J_link"].row_join(new_row)
 
             # evaluate the link frame Jacobian at xyz = [0,0,0] and
             # Wxyz = [0,0,0] to get the center of mass (COM) Jacobian
@@ -1010,7 +1032,7 @@ class rigmech:
             return q_syms + ms_list + inputs[len(q_syms):]
 
         first_joint = next(iter(self.Joints.items()))[0]
-        filter_out = ["q", "dq", "q_rpy", "q_xyz"]
+        filter_out = ["q", "dq", "q_rpy", "q_xyz", "qTau"]
         jsym_names = [
             key
             for key, val in self.joint_syms[first_joint].items()
@@ -1080,8 +1102,8 @@ class rigmech:
         qForceJoints = np.array(qForceJoints).reshape(len(qForceJoints), 1)
         qForces = qForceJoints + qForceExternal
         if Quadratic:  # include qudratic force contributions
-            qForceQuadratic = self.global_syms["func_qFCoriolis"](
-                *qlst, *dqlst)
+            qForceQuadratic = self.global_syms[
+                "func_qFCoriolis"](*qlst, *dqlst)
             qForces -= qForceQuadratic
         if Friction:  # include friction force contributions
             dForceFriction = -dq * \
