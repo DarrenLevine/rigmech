@@ -550,6 +550,56 @@ class rigmech:
         T_inv = R_inv.row_join(xyz_inv).col_join(sp.Matrix([[0, 0, 0, 1]]))
         return T_inv
 
+    @staticmethod
+    def toQuat(roll_pitch_yaw):
+        """Converts a [roll,pitch,yaw] array into
+        a quaternion"""
+        cos_r = np.cos(roll_pitch_yaw[0] * 0.5)
+        sin_r = np.sin(roll_pitch_yaw[0] * 0.5)
+        cos_p = np.cos(roll_pitch_yaw[1] * 0.5)
+        sin_p = np.sin(roll_pitch_yaw[1] * 0.5)
+        cos_y = np.cos(roll_pitch_yaw[2] * 0.5)
+        sin_y = np.sin(roll_pitch_yaw[2] * 0.5)
+        w = cos_y * cos_p * cos_r + sin_y * sin_p * sin_r
+        x = cos_y * cos_p * sin_r - sin_y * sin_p * cos_r
+        y = sin_y * cos_p * sin_r + cos_y * sin_p * cos_r
+        z = sin_y * cos_p * cos_r - cos_y * sin_p * sin_r
+        return np.array([w, x, y, z])
+
+    @staticmethod
+    def QuatConj(wxyz):
+        """Conjugates a 4 element array quaternion"""
+        return np.array([wxyz[0], -wxyz[1], -wxyz[2], -wxyz[3]])
+
+    @staticmethod
+    def QuatMag(wxyz):
+        """Returns the magnitude of a 4 element array quaternion"""
+        return np.sqrt(np.sum(np.square(wxyz)))
+
+    @staticmethod
+    def QuatNormalize(wxyz):
+        """Returns the normalized version of the input quaternion"""
+        return wxyz/rigmech.QuatMag(wxyz)
+
+    @staticmethod
+    def QuatMult(q1, q2):
+        """Multiplies two quaternions"""
+        w = -q1[1] * q2[1] - q1[2] * q2[2] - q1[3] * q2[3] + q1[0] * q2[0]
+        x = q1[1] * q2[0] + q1[2] * q2[3] - q1[3] * q2[2] + q1[0] * q2[1]
+        y = -q1[1] * q2[3] + q1[2] * q2[0] + q1[3] * q2[1] + q1[0] * q2[2]
+        z = q1[1] * q2[2] - q1[2] * q2[1] + q1[3] * q2[0] + q1[0] * q2[3]
+        return np.array([w, x, y, z])
+
+    @staticmethod
+    def QuatAngleDiff(Wxyz1, Wxyz2):
+        """Calculates the euler angle error/difference using
+        quaternion operations"""
+        q1 = rigmech.QuatNormalize(rigmech.toQuat(Wxyz1))
+        q2 = rigmech.QuatNormalize(rigmech.toQuat(Wxyz2))
+        q3 = rigmech.QuatMult(q2, rigmech.QuatConj(q1))
+        WxyzChange = q3[1:] * np.sign(q3[0])
+        return WxyzChange
+
     def T_joint_chain(self, joint_name):
         """ Calculates a homogeneous transformation matrix T from a kinematic
         chain's base joint to the specified joint """

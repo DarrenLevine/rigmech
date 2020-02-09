@@ -64,42 +64,45 @@ ax.set(xlabel='X', ylabel='Y',
 ax.set_aspect('equal')
 plt.legend()
 
-# initialize state
+# initialize states
 qForceJointsZero = [0. for _ in range(MotorCount)]  # tau
 xyzrpyAccels = [0., -9.81, 0., 0., 0., 0.]  # x y z, wx, wy, wz
 q = [-0.01 for _ in range(MotorCount)]  # joint angles in radians
 q[0] += np.pi/2
 dq = [0. for _ in range(MotorCount)]  # joint velocities in radians/sec
-stepcount = 0
+time_elapsed = 0
 # pick a goal, with NaN's for the null space
 Goal = np.array([0.5, 1., np.nan, np.nan, np.nan, -45*np.pi/180])
-# note how important each goal element is relative to the others
+# pick how important each goal element is relative to the others
 Importance = np.array([0.8, 0.8, 0, 0, 0, 1])
 
 
 def CreateNewGoal(enorm, dt):
     '''If the error is small, create a new goal, or
     if give up if it's taking too long'''
-    global Goal, stepcount
-    stepcount += 1
-    error_threshold = 0.02
-    if enorm < error_threshold or stepcount > 1./dt:
+    global Goal, time_elapsed
+    time_elapsed += dt
+    error_threshold = 0.01
+    too_long_threshold = 1.
+    if enorm < error_threshold or time_elapsed > too_long_threshold:
         if enorm < error_threshold:
-            print(f"Reached goal in {stepcount*dt} seconds.")
+            print(f"Reached goal in {time_elapsed} seconds.")
         else:
             print(f"Gave up, could not reach goal.")
         Goal[0] = (np.random.rand()-0.5)*2*0.8
         Goal[1] = (np.random.rand()-0.5)*2*0.8
-        Goal[-1] = np.random.rand()*2*np.pi
-        stepcount = 0
+        Goal[-1] = np.random.rand()*2*np.pi*2
+        time_elapsed = 0
 
 
 def Controller(dt, q, dq, ExtAccels):
-    '''A very simple finite horizon controler, where we pick an initial
-    gain*Torque proportional in the direction of the solution, and then
-    integrate the response over a finite horizon to adjust the Torque
-    to include the imediate frequency response, acheiving a self tuning
-    PI like controler.'''
+    '''A very simple finite horizon controler (with no shooting
+    optimization), where we pick an initial gain*Torque proportional in
+    the direction of the solution, include some compensators for
+    friction/momentum/etc. and then integrate the response over a finite
+    horizon to adjust the final Torque applied to include compensation
+    for the immediate frequency response, acheiving a self tuning PI
+    like controler.'''
     global Goal
 
     # friction compensation
@@ -107,47 +110,62 @@ def Controller(dt, q, dq, ExtAccels):
     # momentum compensation
     qForceJoints -= np.dot(Pendulum.global_syms["func_Mq"](*q), dq)/dt
     # gravity compensation
-    qForceJoints += - Pendulum.global_syms[
+    qForceJoints -= Pendulum.global_syms[
         "func_qFext"](*q, *ExtAccels).T[0, :]
 
     # craft an error function
     LastJointName = next(reversed(Pendulum.Joints.keys()))
     fJ = Pendulum.joint_syms[LastJointName]["func_J_com"]
+    fMq = Pendulum.global_syms["func_Mq"]
     fxyz = Pendulum.joint_syms[LastJointName]["func_xyz_com"]
     fwxyz = Pendulum.joint_syms[LastJointName]["func_Wxyz_com"]
     ctrl_dof = ~np.isnan(Goal)
-    targ = np.array([Goal[ctrl_dof]]).T
+    GoalArray = np.array([Goal]).T
+    GoalArray[np.isnan(GoalArray)] = 0
     Imptc = np.array([Importance[ctrl_dof]]).T
     Imptc = Imptc/np.linalg.norm(Imptc)  # normalize
 
     def qError_func(_q):
         J = fJ(*_q)[ctrl_dof]
-        cartesianErr = targ - np.concatenate((fxyz(*_q), fwxyz(*_q)))[ctrl_dof]
-        cartesianErr = np.multiply(cartesianErr, Imptc)
-        qError = np.linalg.lstsq(J, cartesianErr, rcond=0.005)[0].T[0]
-        normErr = np.linalg.norm(qError)
-        return qError, normErr
+        Wxyz_ee = fwxyz(*_q)
+        cartesianErr = GoalArray - np.concatenate((fxyz(*_q), Wxyz_ee))
+        cartesianErr[3:] = rigmech.QuatAngleDiff(Wxyz_ee, GoalArray[3:])
+        cartesianErr = np.multiply(cartesianErr[ctrl_dof], Imptc)
+
+        # inertia matrix in task space (Mx) is used to
+        # translate the cartesian error vector back into
+        # joint space error (qError) while compensating
+        # for mass
+        Mx_inv = np.dot(J, np.dot(np.linalg.inv(fMq(*q)), J.T))
+        Mx_dot_cErr = np.linalg.lstsq(Mx_inv, cartesianErr, rcond=.005)[0]
+        qError = np.dot(J.T, Mx_dot_cErr).T[0]
+        norm_qError = np.linalg.norm(qError)
+        return qError, norm_qError
 
     # integrate the error along a future limited horizon
-    gain = 20/dt
+    gain = 25/dt
+    max_t = 5E3  # limit the abs torque to this value
     error, enorm = qError_func(q)
     qForceJoints += error*gain/(enorm**0.25)
-    qcopy = copy.deepcopy(q)
-    dqcopy = copy.deepcopy(dq)
-    horizon_size = 3
-    max_t = 5E3  # limit the abs torque to this value
-    # note: ((h+1)**0.5) reduces the importance of
-    # steps farther in the future, as their accuracy decreases
-    # since we're not recalculating the compensators
-    for h in range(horizon_size):
-        qForceJoints[qForceJoints > max_t] = max_t
-        qForceJoints[qForceJoints < -max_t] = -max_t
-        qcopy, dqcopy, _ = Pendulum.ForwardDynamics(
-            dt, qcopy, dqcopy, qForceJoints, ExtAccels)
-        er, en = qError_func(qcopy)
-        qForceJoints += er*gain/(en**0.25)/((h+1)**0.5)
     qForceJoints[qForceJoints > max_t] = max_t
     qForceJoints[qForceJoints < -max_t] = -max_t
+    IncludeHorizon = True
+
+    if IncludeHorizon:
+        horizon_size = 3
+        qcopy = copy.deepcopy(q)
+        dqcopy = copy.deepcopy(dq)
+        # note: ((h+1)**0.5) reduces the importance of
+        # steps farther in the future, as their accuracy decreases
+        # since we're not recalculating the compensators
+        for h in range(horizon_size):
+            qcopy, dqcopy, _ = Pendulum.ForwardDynamics(
+                dt, qcopy, dqcopy, qForceJoints, ExtAccels)
+            er, en = qError_func(qcopy)
+            qForceJoints += er*gain/(en**0.25)/((h+1)**0.5)
+            qForceJoints[qForceJoints > max_t] = max_t
+            qForceJoints[qForceJoints < -max_t] = -max_t
+
     CreateNewGoal(enorm, dt)
     return qForceJoints
 
