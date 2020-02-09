@@ -74,17 +74,20 @@ time_elapsed = 0
 # pick a goal, with NaN's for the null space
 Goal = np.array([0.5, 1., np.nan, np.nan, np.nan, -45*np.pi/180])
 # pick how important each goal element is relative to the others
-Importance = np.array([0.8, 0.8, 0, 0, 0, 1])
+Importance = np.array([0.9, 0.9, 0, 0, 0, 1])
 
 
-def CreateNewGoal(enorm, dt):
+def CreateNewGoal(error, dq, dt):
     '''If the error is small, create a new goal, or
     if give up if it's taking too long'''
     global Goal, time_elapsed
     time_elapsed += dt
     error_threshold = 0.01
     too_long_threshold = 1.
-    if enorm < error_threshold or time_elapsed > too_long_threshold:
+    enorm = np.linalg.norm(error)
+    if enorm < error_threshold or \
+        time_elapsed > too_long_threshold or \
+            np.linalg.norm(dq) < 0.01:
         if enorm < error_threshold:
             print(f"Reached goal in {time_elapsed} seconds.")
         else:
@@ -106,12 +109,19 @@ def Controller(dt, q, dq, ExtAccels):
     global Goal
 
     # friction compensation
-    qForceJoints = np.array(dq)*np.array(Pendulum.global_syms["qFrict"])
+    qForceCompensators = np.array(dq)*np.array(Pendulum.global_syms["qFrict"])
     # momentum compensation
-    qForceJoints -= np.dot(Pendulum.global_syms["func_Mq"](*q), dq)/dt
+    qForceCompensators -= np.dot(Pendulum.global_syms["func_Mq"](*q), dq)/dt
     # gravity compensation
-    qForceJoints -= Pendulum.global_syms[
+    qForceCompensators -= Pendulum.global_syms[
         "func_qFext"](*q, *ExtAccels).T[0, :]
+
+    def limitTorque(Torque):
+        max_t = 5E3  # limit the abs torque to this value
+        Torque[Torque > max_t] = max_t
+        Torque[Torque < -max_t] = -max_t
+
+    limitTorque(qForceCompensators)
 
     # craft an error function
     LastJointName = next(reversed(Pendulum.Joints.keys()))
@@ -125,48 +135,42 @@ def Controller(dt, q, dq, ExtAccels):
     Imptc = np.array([Importance[ctrl_dof]]).T
     Imptc = Imptc/np.linalg.norm(Imptc)  # normalize
 
-    def qError_func(_q):
-        J = fJ(*_q)[ctrl_dof]
+    def cartesianError_func(_q):
         Wxyz_ee = fwxyz(*_q)
         cartesianErr = GoalArray - np.concatenate((fxyz(*_q), Wxyz_ee))
         cartesianErr[3:] = rigmech.QuatAngleDiff(Wxyz_ee, GoalArray[3:])
         cartesianErr = np.multiply(cartesianErr[ctrl_dof], Imptc)
+        return cartesianErr
 
+    def qError_func(_q):
+        cartesianErr = cartesianError_func(_q)
         # inertia matrix in task space (Mx) is used to
         # translate the cartesian error vector back into
         # joint space error (qError) while compensating
         # for mass
-        Mx_inv = np.dot(J, np.dot(np.linalg.inv(fMq(*q)), J.T))
+        J = fJ(*_q)[ctrl_dof]
+        Mx_inv = np.dot(J, np.dot(np.linalg.inv(fMq(*_q)), J.T))
         Mx_dot_cErr = np.linalg.lstsq(Mx_inv, cartesianErr, rcond=.005)[0]
         qError = np.dot(J.T, Mx_dot_cErr).T[0]
-        norm_qError = np.linalg.norm(qError)
-        return qError, norm_qError
+        return qError
 
     # integrate the error along a future limited horizon
-    gain = 25/dt
-    max_t = 5E3  # limit the abs torque to this value
-    error, enorm = qError_func(q)
-    qForceJoints += error*gain/(enorm**0.25)
-    qForceJoints[qForceJoints > max_t] = max_t
-    qForceJoints[qForceJoints < -max_t] = -max_t
-    IncludeHorizon = True
-
-    if IncludeHorizon:
-        horizon_size = 3
+    gain = 80/dt
+    qControlTorque = qError_func(q)*gain
+    horizon_size = 3
+    if horizon_size > 0:
         qcopy = copy.deepcopy(q)
         dqcopy = copy.deepcopy(dq)
-        # note: ((h+1)**0.5) reduces the importance of
-        # steps farther in the future, as their accuracy decreases
-        # since we're not recalculating the compensators
-        for h in range(horizon_size):
+        for _ in range(horizon_size):
+            qForceJoints = qForceCompensators + qControlTorque
             qcopy, dqcopy, _ = Pendulum.ForwardDynamics(
-                dt, qcopy, dqcopy, qForceJoints, ExtAccels)
-            er, en = qError_func(qcopy)
-            qForceJoints += er*gain/(en**0.25)/((h+1)**0.5)
-            qForceJoints[qForceJoints > max_t] = max_t
-            qForceJoints[qForceJoints < -max_t] = -max_t
+                dt/horizon_size, qcopy, dqcopy, qForceJoints, ExtAccels)
+            # adjust conrol torque component
+            qControlTorque = (qControlTorque + qError_func(qcopy)*gain)/2
 
-    CreateNewGoal(enorm, dt)
+    CreateNewGoal(cartesianError_func(q), dq, dt)
+    qForceJoints = qForceCompensators + qControlTorque
+    limitTorque(qForceJoints)
     return qForceJoints
 
 
@@ -195,8 +199,8 @@ def update_plot(num):
     if UseTorqueController:
         gx = Goal[0]
         gy = Goal[1]
-        cr = np.cos(Goal[-1])*0.3
-        sr = np.sin(Goal[-1])*0.3
+        cr = np.cos(Goal[-1])*0.45
+        sr = np.sin(Goal[-1])*0.45
         linegoal.set_data(([gx - cr, gx], [gy - sr, gy]))
         linegoalx.set_data(([gx], [gy]))
         return linejnt, linemass, linegoal, linegoalx
