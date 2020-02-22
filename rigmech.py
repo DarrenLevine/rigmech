@@ -1138,7 +1138,8 @@ class rigmech:
                 global_syms["qFrict"]. Defaults to True.
             Quadratic (bool, optional): If true, includes a the influence of
                 global_syms["qFCoriolis"]. Defaults to True.
-            rcond (float, optional): Cut-off ratio for small singular values in Mq. 
+            rcond (float, optional): Cut-off ratio for small singular values
+                in Mq.
 
         Returns:
             q (list of floats): final joint position vector (in joint space)
