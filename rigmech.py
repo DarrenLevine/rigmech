@@ -1121,7 +1121,8 @@ class rigmech:
             qForceJoints,
             extAccels=[0., 0., -9.81, 0., 0., 0.],
             Friction=True,
-            Quadratic=True
+            Quadratic=True,
+            rcond=.005
     ):
         """Simulates a forward euler step in time for the machanism.
 
@@ -1137,6 +1138,7 @@ class rigmech:
                 global_syms["qFrict"]. Defaults to True.
             Quadratic (bool, optional): If true, includes a the influence of
                 global_syms["qFCoriolis"]. Defaults to True.
+            rcond (float, optional): Cut-off ratio for small singular values in Mq. 
 
         Returns:
             q (list of floats): final joint position vector (in joint space)
@@ -1161,7 +1163,7 @@ class rigmech:
             qForces += dForceFriction
         Mq = self.global_syms["func_Mq"](*qlst)
         # accel (ddq) = Force (qForces) / mass (Mq)
-        ddq = np.linalg.lstsq(Mq, qForces, rcond=None)[0]
+        ddq = np.linalg.lstsq(Mq, qForces, rcond=rcond)[0]
         # euler stepping
         q[: len(dq)] += dt * dq
         dq += dt * np.array(ddq)
