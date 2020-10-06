@@ -141,8 +141,8 @@ class rigmech:
         "axis_xyz": [1, 0, 0],
         "damping": 0,
         "friction": 0,
-        "limit_lower": None,
-        "limit_upper": None,
+        "limit_lower": np.NINF,
+        "limit_upper": np.Infinity,
         "calibration": FIELD_UNSUPPORTED,
         "mimic": FIELD_UNSUPPORTED,
         "safety_controller": FIELD_UNSUPPORTED,
@@ -786,6 +786,10 @@ class rigmech:
         q_indx = 0
         for j_name in self.Joints:
             joint = self.Joints[j_name]
+            if joint["child"] not in self.Links:
+                raise RuntimeError(
+                    f'child ({joint["child"]}) of joint({j_name})'
+                    ' did not exist. Must create a link with this name.')
             clink = self.Links[joint["child"]]
             joint_type = joint["type"]
 
@@ -895,9 +899,9 @@ class rigmech:
 
             # xyz: translation from base to joint or link frame
             E["xyz_joint"] = rigmech.applyTx(
-                E["T_joint"], E["q_xyz"]+sp.Matrix(self.global_syms["xyz"]))
+                E["T_joint"], sp.Matrix(self.global_syms["xyz"]))
             E["xyz_link"] = rigmech.applyTx(
-                E["T_link"], E["q_xyz"]+sp.Matrix(self.global_syms["xyz"]))
+                E["T_link"], sp.Matrix(self.global_syms["xyz"]))
             E["xyz_coj"] = E["xyz_joint"].subs(zero_xyz)  # center of joint
             E["xyz_com"] = E["xyz_link"].subs(zero_xyz)  # center of mass
 
@@ -1011,6 +1015,15 @@ class rigmech:
         if Lambdify:
             print(f"rigmech: starting lambdify()")
             self.lambdify(backend)
+
+        self.global_syms["limits_upper"] = \
+            np.array([
+                [jnt.get('limit_upper', np.Inf)]
+                for jnt in self.Joints.values()])
+        self.global_syms["limits_lower"] = \
+            np.array([
+                [jnt.get('limit_lower', np.NINF)]
+                for jnt in self.Joints.values()])
 
         print(f"rigmech: done")
 
@@ -1168,7 +1181,60 @@ class rigmech:
         # euler stepping
         q[: len(dq)] += dt * dq
         dq += dt * np.array(ddq)
+
+        # enforce limits
+        max_indx = q > self.global_syms["limits_upper"]
+        if any(max_indx):
+            q[max_indx] = self.global_syms["limits_upper"][max_indx]
+            dq[max_indx] = 0.
+            ddq[max_indx] = 0.
+        min_indx = q < self.global_syms["limits_lower"]
+        if any(min_indx):
+            q[min_indx] = self.global_syms["limits_lower"][min_indx]
+            dq[min_indx] = 0.
+            ddq[min_indx] = 0.
+
         return q.T.tolist()[0], dq.T.tolist()[0], ddq.T.tolist()[0]
+
+    def getWireframeLinks(self, q):
+        """Uses the xyz_com lambda function to turn joint
+        states (q) into x,y,z world frame link positions
+
+        Args:
+            q (list): joint state vector
+
+        Returns:
+            xline, yline, zline: x y and z list of points
+        """
+        xline = [0. for _ in self.Joints]
+        yline = [0. for _ in self.Joints]
+        zline = [0. for _ in self.Joints]
+        for cnt, jnt in enumerate(self.Joints.keys()):
+            xyz = self.joint_syms[jnt]["func_xyz_com"](*q)
+            xline[cnt] = xyz[0, 0]
+            yline[cnt] = xyz[1, 0]
+            zline[cnt] = xyz[2, 0]
+        return xline, yline, zline
+
+    def getWireframeJoints(self, q):
+        """Uses the xyz_coj lambda function to turn joint
+        states (q) into x,y,z world frame joint positions
+
+        Args:
+            q (list): joint state vector
+
+        Returns:
+            xline, yline, zline: x y and z list of points
+        """
+        xline = [0. for _ in self.Joints]
+        yline = [0. for _ in self.Joints]
+        zline = [0. for _ in self.Joints]
+        for cnt, jnt in enumerate(self.Joints.keys()):
+            xyz = self.joint_syms[jnt]["func_xyz_coj"](*q)
+            xline[cnt] = xyz[0, 0]
+            yline[cnt] = xyz[1, 0]
+            zline[cnt] = xyz[2, 0]
+        return xline, yline, zline
 
 #
 # Misc. helper functions:

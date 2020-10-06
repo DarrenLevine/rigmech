@@ -34,22 +34,6 @@ if ForceRecompile or not Pendulum.load():
 # Optionally, customize the model parameters without re-running generateEqns()
 Pendulum.global_syms["qFrict"] = [0.5 for _ in range(MotorCount)]
 
-
-def getRobotLines(q, isJoint):
-    ''' Use the xyz_com, and xyz_coj lambda functions to turn
-    joint positional states (q) into x,y world frame positions'''
-    xline = [0. for _ in range(MotorCount)]
-    yline = [0. for _ in range(MotorCount)]
-    for cnt, jnt in enumerate(Pendulum.Joints.keys()):
-        if isJoint:  # coj = center of joint coordinate frame
-            xyz = Pendulum.joint_syms[jnt]["func_xyz_coj"](*q)
-        else:  # com = center of mass coordinate frame
-            xyz = Pendulum.joint_syms[jnt]["func_xyz_com"](*q)
-        xline[cnt] = xyz[0, 0]
-        yline[cnt] = xyz[1, 0]
-    return xline, yline
-
-
 # set up the plot
 fig, ax = plt.subplots()
 linejnt, = ax.plot([0], [0], '-o', label="joint")
@@ -194,8 +178,8 @@ def update_plot(num):
             dt/substeps, q, dq, qForceJoints, xyzrpyAccels)
 
     # update plot
-    linejnt.set_data(getRobotLines(q, True))
-    linemass.set_data(getRobotLines(q, False))
+    linejnt.set_data(Pendulum.getWireframeJoints(q)[:2])
+    linemass.set_data(Pendulum.getWireframeLinks(q)[:2])
     if UseTorqueController:
         gx = Goal[0]
         gy = Goal[1]
